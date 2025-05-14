@@ -1,13 +1,13 @@
 import { StyleSheet, Text, View } from 'react-native'
 import React from 'react'
-import HomeScreen from './Src/Screens/HomeScreen'
 import { store } from './Src/Redux/Store/Store'
 import { Provider } from 'react-redux'
+import MainNavigation from './Src/navigation/MainNavigation'
 
 const App = () => {
   return (
     <Provider store={store}>
-      <HomeScreen />
+      <MainNavigation />
     </Provider>
   )
 }

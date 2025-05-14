@@ -1,4 +1,4 @@
-import React, {useState} from 'react';
+import React, {useEffect, useState} from 'react';
 import {
   StyleSheet,
   Text,
@@ -7,8 +7,8 @@ import {
   View,
   FlatList,
   Image,
-  ScrollView,
   StatusBar,
+  Alert,
 } from 'react-native';
 import {useDispatch, useSelector} from 'react-redux';
 import {
@@ -18,164 +18,284 @@ import {
   deleteTodo,
   editSubTodo,
   editTodo,
+  clearTodos,
 } from '../Redux/Slice/DataSlice';
-import Images from '../Images/Image';
+import Images from '../assets/Image';
+import {color} from '../utils/Theme';
+import firestore from '@react-native-firebase/firestore';
+import {getAuth, signOut} from '@react-native-firebase/auth';
+import {CommonActions, StackActions} from '@react-navigation/native';
+import {clearUser, UserLogOut} from '../Redux/Slice/AuthSlice';
 
-const HomeScreen = () => {
+const HomeScreen = ({navigation}) => {
   const [inputText, setInputText] = useState('');
+  const [subInputIndex, setSubInputIndex] = useState(null);
+  const [editingIndex, setEditingIndex] = useState(null);
+  const [editingSubIndex, setEditingSubIndex] = useState(null);
+  const [tempEmail, setTempEmail] = useState('');
+
   const tasks = useSelector(state => state.data.todoList);
   const dispatch = useDispatch();
+
+  const loginUser = useSelector(state => state.auth.loginUser);
+  const loginEmail = loginUser?.email;
 
   const handleReset = () => {
     setSubInputIndex(null);
     setEditingIndex(null);
+    setEditingSubIndex(null);
     setInputText('');
   };
 
-  const [subInputIndex, setSubInputIndex] = useState(null);
-  const [editingIndex, setEditingIndex] = useState(null);
-  const [editingSubIndex, setEditingSubIndex] = useState(null);
+  const handleResetData = async () => {
+    try {
+      if (!loginEmail) return;
+      await firestore().collection('todo').doc(loginEmail).delete();
+      dispatch(clearTodos());
+      handleReset();
+      console.log('Data cleared for', loginEmail);
+    } catch (error) {
+      console.error('Error clearing data:', error);
+      console.log('Error', 'Failed to clear data: ' + error.message);
+    }
+  };
+
+  useEffect(() => {
+    setTempEmail(loginEmail);
+    const fetchDataFromFirestore = async () => {
+      try {
+        if (!loginEmail) return;
+        const userDoc = await firestore()
+          .collection('todo')
+          .doc(loginEmail)
+          .get();
+        if (userDoc.exists) {
+          const data = userDoc.data();
+          if (data.TodoItem) {
+            dispatch(clearTodos());
+            data.TodoItem.forEach(todo => {
+              dispatch(addTodo(todo.title));
+              if (todo.subTodos && todo.subTodos.length > 0) {
+                todo.subTodos.forEach(subText => {
+                  dispatch(
+                    addSubTodo({index: data.TodoItem.indexOf(todo), subText}),
+                  );
+                });
+              }
+            });
+          }
+        } else {
+          dispatch(clearTodos());
+        }
+      } catch (error) {
+        console.error('Error fetching user todo data:', error);
+      }
+    };
+    fetchDataFromFirestore();
+  }, [loginEmail]);
+
+  useEffect(() => {
+    const saveDataToFirestore = async () => {
+      try {
+        if (!loginEmail) return;
+        await firestore().collection('todo').doc(loginEmail).set({
+          TodoItem: tasks,
+        });
+        console.log('Tasks saved to Firestore for:', loginEmail);
+      } catch (error) {
+        console.error('Error saving tasks to Firestore:', error);
+      }
+    };
+    saveDataToFirestore();
+  }, [tasks, loginEmail]);
 
   const handleAdd = () => {
-    if (inputText) {
-      if (subInputIndex !== null) {
-        if (editingSubIndex !== null) {
-          dispatch(
-            editSubTodo({
-              index: subInputIndex,
-              subIndex: editingSubIndex,
-              newText: inputText,
-            }),
-          );
-          setEditingSubIndex(null);
-        } else {
-          dispatch(addSubTodo({index: subInputIndex, subText: inputText}));
-        }
-        setSubInputIndex(null);
-      } else if (editingIndex !== null) {
-        dispatch(editTodo({index: editingIndex, newTitle: inputText}));
-        setEditingIndex(null);
+    if (!inputText.trim()) return;
+
+    if (subInputIndex !== null) {
+      if (editingSubIndex !== null) {
+        dispatch(
+          editSubTodo({
+            index: subInputIndex,
+            subIndex: editingSubIndex,
+            newText: inputText,
+          }),
+        );
+        setEditingSubIndex(null);
       } else {
-        dispatch(addTodo(inputText));
+        dispatch(addSubTodo({index: subInputIndex, subText: inputText}));
       }
-      setInputText('');
+      setSubInputIndex(null);
+    } else if (editingIndex !== null) {
+      dispatch(editTodo({index: editingIndex, newTitle: inputText}));
+      setEditingIndex(null);
+    } else {
+      dispatch(addTodo(inputText));
+    }
+    setInputText('');
+  };
+
+  const renderItem = ({item, index}) => (
+    <View style={styles.ListMainView}>
+      <View>
+        <Text style={styles.listItem}>• {item.title}</Text>
+        {item.subTodos?.map((sub, subIndex) => (
+          <View key={subIndex} style={styles.subListItemRow}>
+            <Text style={styles.SublistItem}>{sub}</Text>
+            <View style={styles.subIcons}>
+              <TouchableOpacity
+                onPress={() => {
+                  setInputText(sub);
+                  setSubInputIndex(index);
+                  setEditingSubIndex(subIndex);
+                }}>
+                <Image
+                  style={styles.IconImage}
+                  source={Images.Edit}
+                  resizeMode="cover"
+                />
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={() => dispatch(deleteSubTodo({index, subIndex}))}>
+                <Image
+                  style={styles.IconImage}
+                  source={Images.Delete}
+                  resizeMode="cover"
+                />
+              </TouchableOpacity>
+            </View>
+          </View>
+        ))}
+      </View>
+      <View style={styles.mainIcons}>
+        <TouchableOpacity onPress={() => setSubInputIndex(index)}>
+          <Image
+            style={styles.IconImage}
+            source={Images.Add}
+            resizeMode="cover"
+          />
+        </TouchableOpacity>
+        <TouchableOpacity
+          onPress={() => {
+            setInputText(item.title);
+            setEditingIndex(index);
+            setSubInputIndex(null);
+            setEditingSubIndex(null);
+          }}>
+          <Image
+            style={styles.IconImage}
+            source={Images.Edit}
+            resizeMode="cover"
+          />
+        </TouchableOpacity>
+        <TouchableOpacity onPress={() => dispatch(deleteTodo(index))}>
+          <Image
+            style={styles.IconImage}
+            source={Images.Delete}
+            resizeMode="cover"
+          />
+        </TouchableOpacity>
+      </View>
+    </View>
+  );
+
+  const handleLogout = async () => {
+    try {
+      dispatch(clearTodos());
+      dispatch(UserLogOut());
+      dispatch(clearUser());
+      await signOut(getAuth());
+      navigation.reset({
+        index: 0,
+        routes: [{name: 'LoginScreen'}],
+      });
+    } catch (error) {
+      console.error('Error signing out:', error);
     }
   };
 
   return (
-    <View style={{flex: 1, backgroundColor: '#5A6A84'}}>
-      <StatusBar backgroundColor={'#5A6A84'} barStyle={'light-content'} />
-      <ScrollView>
+    <View style={{flex: 1, backgroundColor: '#5A6A84', paddingBottom: 20}}>
+      <StatusBar backgroundColor="#5A6A84" barStyle="light-content" />
+      <View>
         <Text style={styles.HeaderText}>ToDo List</Text>
-        <View style={styles.container}>
-          <View style={styles.InputMain}>
-            <TextInput
-              style={styles.InputBox}
-              placeholder="Enter Today Data"
-              placeholderTextColor={'#FFFFFF'}
-              value={inputText}
-              onChangeText={setInputText}
-            />
-          </View>
-          <View style={styles.ButtonMianView}>
-            <TouchableOpacity style={styles.ButtonMain} onPress={handleAdd}>
-              <Text style={styles.ButtonText}>
-                {editingIndex !== null
-                  ? 'Edit'
-                  : subInputIndex !== null
-                  ? editingSubIndex !== null
-                    ? 'Edit Sub'
-                    : 'Add Sub'
-                  : 'Add'}
-              </Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity style={styles.ButtonMain} onPress={handleReset}>
-              <Text style={styles.ButtonText}>Reset</Text>
-            </TouchableOpacity>
-          </View>
-          <View>
-            <FlatList
-              data={tasks}
-              renderItem={({item, index}) => {
-                return (
-                  <View style={styles.ListMainView}>
-                    <View>
-                      <Text style={styles.listItem}>• {item.title}</Text>
-
-                      {item.subTodos?.map((sub, subIndex) => {
-                        return (
-                          <View key={subIndex} style={styles.subListItemRow}>
-                            <Text style={styles.SublistItem}> {sub}</Text>
-
-                            <View style={styles.subIcons}>
-                              <TouchableOpacity
-                                onPress={() => {
-                                  setInputText(sub);
-                                  setSubInputIndex(index);
-                                  setEditingSubIndex(subIndex);
-                                }}>
-                                <Image
-                                  style={styles.IconImage}
-                                  source={Images.Edit}
-                                  resizeMode="cover"
-                                />
-                              </TouchableOpacity>
-                              <TouchableOpacity
-                                onPress={() =>
-                                  dispatch(deleteSubTodo({index, subIndex}))
-                                }>
-                                <Image
-                                  style={styles.IconImage}
-                                  source={Images.Delete}
-                                  resizeMode="cover"
-                                />
-                              </TouchableOpacity>
-                            </View>
-                          </View>
-                        );
-                      })}
-                    </View>
-
-                    <View style={styles.mainIcons}>
-                      <TouchableOpacity onPress={() => setSubInputIndex(index)}>
-                        <Image
-                          style={styles.IconImage}
-                          source={Images.Add}
-                          resizeMode="cover"
-                        />
-                      </TouchableOpacity>
-                      <TouchableOpacity
-                        onPress={() => {
-                          setInputText(item.title);
-                          setEditingIndex(index);
-                          setSubInputIndex(null);
-                          setEditingSubIndex(null);
-                        }}>
-                        <Image
-                          style={styles.IconImage}
-                          source={Images.Edit}
-                          resizeMode="cover"
-                        />
-                      </TouchableOpacity>
-                      <TouchableOpacity
-                        onPress={() => dispatch(deleteTodo(index))}>
-                        <Image
-                          style={styles.IconImage}
-                          source={Images.Delete}
-                          resizeMode="cover"
-                        />
-                      </TouchableOpacity>
-                    </View>
-                  </View>
-                );
-              }}
-              keyExtractor={(item, index) => index.toString()}
-              contentContainerStyle={{marginTop: 20}}
-            />
-          </View>
+      </View>
+      <View style={styles.container}>
+        <Text style={{color: '#FFF'}}>Email :- {tempEmail}</Text>
+        <View style={styles.InputMain}>
+          <TextInput
+            style={styles.InputBox}
+            placeholder="Enter Today Data"
+            placeholderTextColor={color.FFF}
+            value={inputText}
+            onChangeText={setInputText}
+          />
         </View>
-      </ScrollView>
+        <View style={styles.ButtonMianView}>
+          <TouchableOpacity style={styles.ButtonMain} onPress={handleAdd}>
+            <Text style={styles.ButtonText}>
+              {editingIndex !== null
+                ? 'Edit'
+                : subInputIndex !== null
+                ? editingSubIndex !== null
+                  ? 'Edit Sub'
+                  : 'Add Sub'
+                : 'Add'}
+            </Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity style={styles.ButtonMain} onPress={handleReset}>
+            <Text style={styles.ButtonText}>Reset</Text>
+          </TouchableOpacity>
+        </View>
+        <FlatList
+          data={tasks}
+          keyExtractor={(item, index) => index.toString()}
+          renderItem={renderItem}
+          contentContainerStyle={{paddingBottom: 100}}
+          showsVerticalScrollIndicator={false}
+        />
+      </View>
+      <View style={{flex: 1, maxHeight: 50, flexDirection: 'row'}}>
+        <TouchableOpacity
+          onPress={handleResetData}
+          style={{
+            flex: 1,
+            marginHorizontal: 8,
+            backgroundColor: 'red',
+            justifyContent: 'center',
+            borderRadius: 10,
+          }}>
+          <Text
+            style={{
+              fontSize: 18,
+              fontWeight: '700',
+              color: '#FFF',
+              textAlign: 'center',
+            }}>
+            CLEAR
+          </Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={{
+            flex: 1,
+            marginHorizontal: 8,
+            backgroundColor: 'red',
+            justifyContent: 'center',
+            borderRadius: 10,
+          }}
+          onPress={() => handleLogout()}>
+          <Text
+            style={{
+              fontSize: 18,
+              fontWeight: '700',
+              color: '#FFF',
+              textAlign: 'center',
+            }}>
+            Log Out
+          </Text>
+        </TouchableOpacity>
+      </View>
     </View>
   );
 };
@@ -186,12 +306,11 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     marginHorizontal: 16,
-    marginBottom: 10,
   },
   HeaderText: {
     fontSize: 28,
     fontWeight: 'bold',
-    color: '#F7D26A',
+    color: color.F7D26A,
     textAlign: 'center',
     marginVertical: 20,
   },
@@ -201,32 +320,31 @@ const styles = StyleSheet.create({
   },
   InputBox: {
     fontSize: 16,
-    color: '#FFFFFF',
+    color: color.FFF,
     padding: 12,
-    borderColor: '#F7D26A',
+    borderColor: color.F7D26A,
     borderRadius: 10,
     borderWidth: 1,
-    backgroundColor: '#3E4A61',
+    backgroundColor: color.BG3E4,
   },
   ButtonMianView: {
     flexDirection: 'row',
     justifyContent: 'space-evenly',
-    marginTop: 20,
+    gap: 10,
   },
   ButtonMain: {
     flex: 1,
-    backgroundColor: '#F7D26A',
+    backgroundColor: color.F7D26A,
     paddingVertical: 12,
-    marginHorizontal: 7,
     borderRadius: 10,
     elevation: 8,
-    shadowColor: '#fff',
+    shadowColor: color.FFF,
     shadowOpacity: 0.2,
     shadowOffset: {width: 0, height: 2},
     shadowRadius: 4,
   },
   ButtonText: {
-    color: '#3E4A61',
+    color: color.BG3E4,
     fontSize: 18,
     fontWeight: 800,
     textAlign: 'center',
@@ -236,16 +354,17 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    backgroundColor: '#3E4A61',
+    backgroundColor: color.BG3E4,
     borderRadius: 8,
     marginVertical: 4,
   },
   listItem: {
-    minWidth: '70%',
-    maxWidth: '70%',
+    minWidth: '85%',
+    maxWidth: '85%',
+    marginHorizontal: 6,
     fontSize: 18,
     fontWeight: 800,
-    color: '#FFFFFF',
+    color: color.FFF,
     padding: 10,
   },
   SublistItem: {
@@ -253,7 +372,7 @@ const styles = StyleSheet.create({
     maxWidth: '80%',
     fontSize: 16,
     fontWeight: 600,
-    color: '#FFFFFF',
+    color: color.FFF,
     padding: 10,
   },
   IconImage: {
@@ -276,18 +395,18 @@ const styles = StyleSheet.create({
 
   subInput: {
     flex: 1,
-    backgroundColor: '#2F3B50',
+    backgroundColor: color.BGD2F3,
     borderRadius: 8,
     padding: 8,
-    color: '#fff',
-    borderColor: '#F7D26A',
+    color: color.FFF,
+    borderColor: color.F7D26A,
     borderWidth: 1,
     marginRight: 8,
   },
 
   subAddButton: {
-    backgroundColor: '#F7D26A',
-    color: '#3E4A61',
+    backgroundColor: color.F7D26A,
+    color: color.BG3E4,
     paddingVertical: 6,
     paddingHorizontal: 12,
     borderRadius: 8,
@@ -301,7 +420,7 @@ const styles = StyleSheet.create({
     marginVertical: 4,
     minWidth: '60%',
     borderTopWidth: 1,
-    borderColor: '#F7D26A',
+    borderColor: color.F7D26A,
     borderRadius: 6,
   },
 
@@ -315,6 +434,7 @@ const styles = StyleSheet.create({
     position: 'absolute',
     right: 8,
     top: 10,
+    gap: 4,
     flexDirection: 'row',
     justifyContent: 'flex-end',
   },
